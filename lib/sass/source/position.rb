@@ -35,5 +35,9 @@ module Sass::Source
           str.length - str.rindex("\n") - 1
         end)
     end
+
+    def to_ruby
+      "::Sass::Source::Position.new(#{line}, #{offset})"
+    end
   end
 end

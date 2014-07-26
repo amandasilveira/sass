@@ -85,6 +85,33 @@ module Sass::Script::Tree
       node
     end
 
+    def to_sexp(environment)
+      block = s(:block)
+      if @before
+        before_var = environment.unique_ident
+        block << s(:lasgn, s(:lvar, before_var), @before.to_sexp(environment))
+      end
+      mid_var = environment.unique_ident
+      block << s(:lasgn, s(:lvar, mid_var), @mid.to_sexp(environment))
+      block << s(:if, s(:call, s(:lvar, mid_var), :is_a?, sass(:Script, :Value, :String)),
+        s(:lasgn, s(:lvar, mid_var), s(:call, s(:lvar, mid_var), :value)))
+      if @after
+        after_var = environment.unique_ident
+        block << s(:lasgn, s(:lvar, after_var), @after.to_sexp(environment))
+      end
+
+      interp = s(:dstr, "")
+      interp << s(:evstr, s(:lvar, before_var)) if @before
+      interp << s(:str, ' ') if @before && @whitespace_before
+      ruby << 'Sass::Script::Value::String.new("'
+      ruby << '#{' << before_var << '}' if @before
+      ruby << ' ' if @before && @whitespace_before
+      ruby << '#{' << mid_var << '}'
+      ruby << ' ' if @after && @whitespace_after
+      ruby << '#{' << after_var << '}' if @after
+      ruby << '")\nend'
+    end
+
     protected
 
     # Evaluates the interpolation.

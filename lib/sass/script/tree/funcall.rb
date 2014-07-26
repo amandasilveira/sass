@@ -8,6 +8,8 @@ module Sass::Script::Tree
   # {Sass::Script::Functions}, or if no function with the given name exists it
   # returns a string representation of the function call.
   class Funcall < Node
+    include Sass::Util::Sexp
+
     # The name of the function.
     #
     # @return [String]
@@ -110,6 +112,95 @@ module Sass::Script::Tree
       @keywords.as_stored.each {|k, v| copied_keywords[k] = v.deep_copy}
       node.instance_variable_set('@keywords', copied_keywords)
       node
+    end
+
+    def to_sexp(environment)
+      variable, function = environment.fn_variable(name)
+      unless variable
+        # Sass::Script::Value::String.new("#{name}(#{arg1}, #{arg2})")
+        return s(:call, sass(:Script, :Value, :String), :new,
+          s(:dstr, "#{name}(").concat(Sass::Util.intersperse(args.map do |arg|
+              s(:evstr, arg.to_sexp(environment))
+           end, s(:str, ", "))) << s(:str, ")"))
+      end
+
+      if !function.splat && !keywords.empty?
+        unknown_args = Sass::Util.array_minus(keywords.keys,
+          function.args.map {|var| var.first.underscored_name})
+        if function.splat && unknown_args.include?(function.splat.underscored_name)
+          raise Sass::SyntaxError.new("Argument $#{function.splat.name} of function " +
+            "#{name} cannot be used as a named argument.")
+        elsif unknown_args.any?
+          description = unknown_args.length > 1 ? 'the following arguments:' : 'an argument named'
+          raise Sass::SyntaxError.new("Function #{name} doesn't have #{description} " +
+            "#{unknown_args.map {|name| "$#{name}"}.join ', '}.")
+        end
+      end
+
+      if args.size > function.args.size && !function.splat
+        takes = function.args.size
+        passed = args.size
+        raise Sass::SyntaxError.new("Function #{name} takes #{takes} " +
+          "argument#{'s' unless takes == 1} but #{passed} #{passed == 1 ? 'was' : 'were'} passed.")
+      end
+
+      block = s(:block)
+      if kwarg_splat && function.splat
+        kwarg_splat_var = environment.unique_ident(:kwarg_splat)
+        block << s(:lasgn, kwarg_splat_var, kwarg_splat.to_sexp(environment))
+        block << s(:if, s(:call, s(:lvar, kwarg_splat_var), :is_a?, sass(:Script, :Value, :Map))
+            nil
+          syntax_error(s(:dstr,
+            "Variable keyword arguments must be a map (was ",
+            s(:evstr, s(:lvar, kwarg_splat_var)),
+            s(:str, ")."))))
+      end
+
+      remaining_keywords = keywords.dup
+      ruby_args = function.args.zip(args[0...function.args.length]).map do |((var, default), value)|
+        if value && keywords.has_key?(var.name)
+          raise Sass::SyntaxError.new("Function #{name} was passed argument $#{var.name} both by " +
+            "position and by name.")
+        end
+
+        value ||= remaining_keywords.delete(var.name)
+
+        if value.nil?
+          unless default
+            raise Sass::SyntaxError.new("Function #{name} is missing argument #{var.inspect}.")
+          end
+          s(:nil)
+        else
+          value.to_sexp(environment)
+        end
+      end
+
+      if function.splat
+        if !remaining_keywords.empty?
+          map = s(:call, sass(:Util, :NormalizedMap), :new, hash(
+              remaining_keywords.as_stored.map do |(name, arg)|
+                [s(:str, name), arg.to_sexp(environment)]
+              end))
+          if kwarg_splat_var
+            map = s(:call, map, :update, s(:call, sass(:Script, :Helpers),
+                :arg_hash, s(:lvar, kwarg_splat_var)))
+          end
+          ruby_args << map
+        end
+
+        if args.length > function.args.length
+          ruby_args.concat(args[function.args.length..-1].map {|arg| arg.to_sexp(environment)})
+        end
+      end
+
+      if splat
+        # TODO: if [function] takes a splat, pass in the original splat's
+        # separator and keywords somehow.
+        ruby_args << s(:splat, s(:call, splat.to_sexp(environment), :to_a))
+      end
+
+      block << s(:call, variable, :[], *ruby_args)
+      block
     end
 
     protected

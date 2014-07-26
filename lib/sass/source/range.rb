@@ -37,5 +37,10 @@ module Sass::Source
     def inspect
       "(#{start_pos.inspect} to #{end_pos.inspect}#{" in #{@file}" if @file})"
     end
+
+    def to_ruby
+      "::Sass::Source::Range.new(#{start_pos.to_ruby}, #{end_pos.to_ruby}, " +
+        "#{file.dump}, _s_importer)"
+    end
   end
 end
